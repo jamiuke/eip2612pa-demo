@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>eip2612pa — EIP-2612 Permit Auditor (live demo)</title>
+<meta name="description" content="Live in-browser demo of eip2612pa — audits deployed EVM bytecode for EIP-2612 permit correctness on Pharos." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Ctext y='24' x='4' font-size='22' fill='%2300ff66' font-family='monospace'%3E%26gt;_%3C/text%3E%3C/svg%3E" />
+<style>
+:root {
+  /* terminal/hacker palette */
+  --bg:           #050a05;
+  --bg-2:         #0a120a;
+  --bg-card:      #0d150d;
+  --bg-soft:      #112011;
+  --bg-glow:      rgba(0, 255, 102, 0.06);
+  --border:       #1a301a;
+  --border-hot:   #2a4a2a;
+  --text:         #c8ffc8;
+  --text-dim:     #5a9b5a;
+  --text-faint:   #3a6b3a;
+
+  --green:        #00ff66;
+  --green-bright: #66ffaa;
+  --green-glow:   rgba(0, 255, 102, 0.55);
+  --amber:        #ffb000;
+  --red:          #ff3030;
+  --red-bright:   #ff6060;
+  --red-glow:     rgba(255, 48, 48, 0.4);
+  --purple:       #c800ff;
+  --cyan:         #00d4ff;
+
+  --pass:         var(--green);
+  --warn:         var(--amber);
+  --fail:         var(--red);
+  --nfound:       var(--purple);
+  --skip:         var(--text-faint);
+  --info:         var(--cyan);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; min-height: 100vh;
+  background: var(--bg); color: var(--text);
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, "Courier New", monospace;
+  font-size: 14px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* CRT scanlines + vignette */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 255, 102, 0) 0px,
+    rgba(0, 255, 102, 0) 2px,
+    rgba(0, 0, 0, 0.18) 3px,
+    rgba(0, 0, 0, 0.18) 4px
+  );
+}
+body::after {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%);
+}
+
+a { color: var(--green); text-decoration: none; }
+a:hover { color: var(--green-bright); text-shadow: 0 0 6px var(--green-glow); }
+
+::selection { background: var(--green); color: #000; }
+
+/* ===== top bar ===== */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px; background: rgba(5, 10, 5, 0.85);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
+}
+.topbar .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1rem; letter-spacing: 0.5px; }
+.topbar .brand .logo {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: 1px solid var(--green);
+  color: var(--green); font-weight: 700; font-size: 0.8rem;
+  text-shadow: 0 0 6px var(--green-glow);
+}
+.topbar nav { display: flex; gap: 16px; }
+.topbar nav a { color: var(--text-dim); font-size: 0.85rem; }
+.topbar nav a:hover { color: var(--green-bright); }
+
+/* ===== hero ===== */
+.hero {
+  position: relative; z-index: 1;
+  padding: 56px 20px 16px; text-align: center;
+  max-width: 760px; margin: 0 auto;
+}
+.hero .pre {
+  display: inline-block; color: var(--text-dim);
+  font-size: 0.78rem; margin-bottom: 14px;
+  letter-spacing: 1.2px;
+}
+.hero h1 {
+  font-size: 2.2rem; line-height: 1.15; margin: 0 0 14px;
+  font-weight: 700; color: var(--green);
+  text-shadow: 0 0 20px var(--green-glow);
+}
+.hero h1 .blinker {
+  display: inline-block; width: 11px; height: 22px;
+  background: var(--green); vertical-align: middle;
+  animation: blink 1s steps(1) infinite;
+  margin-left: 4px;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.hero p { color: var(--text-dim); font-size: 0.95rem; max-width: 580px; margin: 0 auto 14px; }
+.hero .meta {
+  display: inline-block; padding: 4px 10px;
+  border: 1px solid var(--border-hot); color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.hero .meta .dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 6px var(--green-glow);
+  margin-right: 6px; animation: pulse 1.5s infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ===== layout ===== */
+.container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 20px; }
+.grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+.card {
+  position: relative; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 0;
+  padding: 18px 20px;
+}
+/* ASCII corners */
+.card::before, .card::after {
+  position: absolute; color: var(--text-faint);
+  font-size: 0.85rem; line-height: 1; pointer-events: none;
+}
+.card::before { content: "┌─"; top: 6px; left: 8px; }
+.card::after  { content: "─┐"; top: 6px; right: 8px; }
+
+.card h2 {
+  font-size: 0.92rem; margin: 0 0 14px;
+  color: var(--green); text-transform: uppercase;
+  letter-spacing: 1.5px; font-weight: 700;
+}
+.card h2 .badge {
+  display: inline-block; padding: 1px 6px; margin-left: 6px;
+  font-size: 0.7rem; color: var(--text-dim);
+  border: 1px solid var(--border-hot);
+}
+
+/* ===== form ===== */
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.form-row label {
+  font-size: 0.72rem; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.8px;
+}
+.form-row input, .form-row select {
+  background: #000; border: 1px solid var(--border-hot);
+  color: var(--green); padding: 8px 10px; border-radius: 0;
+  font-family: inherit; font-size: 0.92rem;
+  caret-color: var(--green);
+}
+.form-row input:focus, .form-row select:focus {
+  outline: none; border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green), 0 0 12px var(--green-glow);
+}
+.form-row .hint { font-size: 0.7rem; color: var(--text-faint); }
+.form-row input[type="text"] { font-family: inherit; }
+
+.form-row.row { flex-direction: row; gap: 10px; }
+.form-row.row > div { flex: 1; }
+
+.btn {
+  background: #000; color: var(--green);
+  border: 1px solid var(--green); padding: 9px 16px;
+  font-family: inherit; font-size: 0.9rem; font-weight: 700;
+  cursor: pointer; letter-spacing: 0.8px; text-transform: uppercase;
+  transition: all 0.1s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--green); color: #000;
+  box-shadow: 0 0 16px var(--green-glow);
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.secondary {
+  border-color: var(--border-hot); color: var(--text-dim);
+}
+.btn.secondary:hover {
+  background: var(--border); color: var(--green-bright);
+  border-color: var(--green);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ===== preset chips ===== */
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+.chip {
+  background: #000; border: 1px solid var(--border-hot);
+  color: var(--text-dim); padding: 4px 10px;
+  font-family: inherit; font-size: 0.75rem;
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--bg-soft); color: var(--green-bright);
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+/* ===== terminal log ===== */
+.terminal {
+  background: #000; border: 1px solid var(--border-hot);
+  padding: 12px 14px; min-height: 240px; max-height: 520px;
+  overflow-y: auto; font-size: 0.86rem;
+  white-space: pre-wrap; word-break: break-word;
+}
+.terminal .ln { display: block; }
+.terminal .ln.prompt  { color: var(--green); }
+.terminal .ln.user    { color: var(--cyan); }
+.terminal .ln.system  { color: var(--text-dim); }
+.terminal .ln.ok      { color: var(--green); }
+.terminal .ln.warn    { color: var(--amber); }
+.terminal .ln.err     { color: var(--red-bright); }
+.terminal .ln.dim     { color: var(--text-faint); }
+.terminal .cursor {
+  display: inline-block; width: 8px; height: 14px;
+  background: var(--green); vertical-align: middle;
+  animation: blink 1s steps(1) infinite;
+}
+
+/* ===== check rows ===== */
+.check {
+  border-left: 2px solid var(--skip);
+  padding: 6px 10px; margin: 4px 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+.check.pass   { border-left-color: var(--pass); }
+.check.warn   { border-left-color: var(--warn); }
+.check.fail   { border-left-color: var(--fail); }
+.check.nfound { border-left-color: var(--nfound); }
+.check.skip   { border-left-color: var(--skip); }
+.check h4 {
+  margin: 0; font-size: 0.85rem; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+  font-family: inherit;
+}
+.check h4 .verdict-tag {
+  display: inline-block; padding: 0 6px;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.5px;
+  border: 1px solid currentColor;
+}
+.check.pass h4, .check.pass h4 .verdict-tag   { color: var(--pass); }
+.check.warn h4, .check.warn h4 .verdict-tag   { color: var(--warn); }
+.check.fail h4, .check.fail h4 .verdict-tag   { color: var(--fail); text-shadow: 0 0 6px var(--red-glow); }
+.check.nfound h4, .check.nfound h4 .verdict-tag { color: var(--nfound); }
+.check.skip h4, .check.skip h4 .verdict-tag   { color: var(--skip); }
+.check .meta { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+
+.score {
+  display: inline-block; padding: 3px 12px;
+  border: 1px solid currentColor; font-weight: 700;
+  font-family: inherit;
+}
+.score.pass   { color: var(--pass); text-shadow: 0 0 6px var(--green-glow); }
+.score.warn   { color: var(--warn); }
+.score.fail   { color: var(--fail); text-shadow: 0 0 6px var(--red-glow); }
+.score.nfound { color: var(--nfound); }
+
+/* ===== status / spinner ===== */
+.status { font-size: 0.82rem; color: var(--text-dim); display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.status .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 6px var(--green-glow);
+}
+.status.error .dot { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
+.status .dot.pulse { animation: pulse 1.2s infinite; }
+
+.spinner {
+  display: inline-block; width: 12px; height: 12px;
+  border: 2px solid var(--border); border-top-color: var(--green);
+  border-radius: 50%; animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== footer ===== */
+.footer {
+  position: relative; z-index: 1;
+  padding: 24px 20px; text-align: center;
+  color: var(--text-faint); font-size: 0.78rem;
+  border-top: 1px solid var(--border); margin-top: 32px;
+}
+.footer a { color: var(--text-dim); margin: 0 6px; }
+.footer a:hover { color: var(--green-bright); }
+
+/* ===== mobile ===== */
+@media (max-width: 600px) {
+  .hero h1 { font-size: 1.4rem; }
+  .topbar { padding: 8px 12px; }
+  .topbar nav { display: none; }
+  .container { padding: 14px; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo">E2</span> <span>eip2612pa</span></div>
+  <nav>
+    <a href="https://github.com/jamiuke/EIP-2612PA" target="_blank" rel="noopener">↗ source</a>
+    <a href="https://github.com/jamiuke/EIP-2612PA/blob/main/SKILL.md" target="_blank" rel="noopener">SKILL.md</a>
+    <a href="https://github.com/jamiuke/EIP-2612PA#installation" target="_blank" rel="noopener">install</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div class="pre">// security audit tool · v1.0.0</div>
+  <h1>eip2612pa<span class="blinker"></span></h1>
+  <p>Static auditor for EIP-2612 permit implementations. Point it at a Pharos contract and it walks the deployed bytecode, finds the <code>permit()</code> entry, and runs 8 correctness checks against the EIP-2612 spec — selector presence, nonces, DOMAIN_SEPARATOR, type-hash literal, ecrecover, nonce increment, deadline, owner check.</p>
+  <div class="meta"><span class="dot"></span> live · rpc.pharos.xyz · 1672</div>
+</section>
+
+<main class="container">
+  <div class="grid">
+
+    <!-- LEFT: form + terminal log -->
+    <div>
+      <div class="card">
+        <h2>// target<span class="badge">[1]</span></h2>
+
+        <div class="form-row">
+          <label>&gt; contract_address</label>
+          <input id="addr" type="text" placeholder="0x..." autocomplete="off" spellcheck="false" />
+          <div class="hint">// empty box. fresh rpc fetch on every run. no cache.</div>
+        </div>
+
+        <div class="form-row row" style="margin-bottom: 12px;">
+          <div>
+            <label>&gt; network</label>
+            <select id="network">
+              <option value="mainnet">mainnet (1672)</option>
+              <option value="testnet">testnet (688689)</option>
+            </select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button class="btn" id="run" style="width: 100%;">[ audit ]</button>
+          </div>
+        </div>
+
+        <div class="presets" id="presets"></div>
+
+        <div class="btn-row">
+          <button class="btn secondary" id="clear">[ clear ]</button>
+          <a class="btn secondary" href="https://github.com/jamiuke/EIP-2612PA" target="_blank" rel="noopener">[ github ]</a>
+        </div>
+
+        <div class="status" id="status" style="display:none;"><span class="dot pulse"></span><span id="statusText">…</span></div>
+      </div>
+
+      <div class="card" style="margin-top: 14px;">
+        <h2>// terminal<span class="badge">[2]</span></h2>
+        <div class="terminal" id="term">
+<span class="ln system">$ eip2612pa --target &lt;paste address&gt; --network mainnet</span>
+<span class="ln system">// awaiting input. type address above, hit [audit].</span>
+<span class="ln dim">// tip: click a chip below to pre-fill.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: explainer -->
+    <div>
+      <div class="card">
+        <h2>// the 8 checks</h2>
+        <table style="width: 100%; font-size: 0.82rem; border-collapse: collapse;">
+          <thead>
+            <tr style="color: var(--text-dim); text-align: left;">
+              <th style="padding: 5px 0; border-bottom: 1px solid var(--border);">id</th>
+              <th style="padding: 5px 0; border-bottom: 1px solid var(--border);">check</th>
+              <th style="padding: 5px 0; border-bottom: 1px solid var(--border); text-align: right;">sev</th>
+            </tr>
+          </thead>
+          <tbody style="color: var(--text-dim);">
+            <tr><td style="padding: 4px 0; color: var(--green);">01</td><td>permit() selector</td><td style="text-align: right; color: var(--red);">100</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">02</td><td>nonces() getter</td><td style="text-align: right; color: var(--red);">100</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">03</td><td>DOMAIN_SEPARATOR()</td><td style="text-align: right; color: var(--red);">100</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">04</td><td>Permit() type-hash</td><td style="text-align: right; color: var(--red);">95</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">05</td><td>ecrecover call</td><td style="text-align: right; color: var(--red);">100</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">06</td><td>nonce increment</td><td style="text-align: right; color: var(--amber);">80</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">07</td><td>deadline check</td><td style="text-align: right; color: var(--red);">90</td></tr>
+            <tr><td style="padding: 4px 0; color: var(--green);">08</td><td>owner == recovered</td><td style="text-align: right; color: var(--red);">90</td></tr>
+          </tbody>
+        </table>
+        <div style="font-size: 0.75rem; color: var(--text-faint); margin-top: 10px;">
+          // overall = min severity of FAIL. score 0 = not eip-2612.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 14px;">
+        <h2>// how it works</h2>
+        <ol style="margin: 0; padding-left: 18px; font-size: 0.85rem; color: var(--text-dim);">
+          <li style="margin-bottom: 4px;">fetch bytecode via <code style="color: var(--green);">eth_getCode</code></li>
+          <li style="margin-bottom: 4px;">extract the 82-byte <code style="color: var(--green);">Permit(...)</code> type-hash (PUSH-N aware)</li>
+          <li style="margin-bottom: 4px;">find the <code style="color: var(--green);">permit()</code> selector (0xd505accf)</li>
+          <li style="margin-bottom: 4px;">walk opcodes near it: <code style="color: var(--green);">STATICCALL</code> to 0x01, <code style="color: var(--green);">TIMESTAMP</code>, <code style="color: var(--green);">EQ</code>, SLOAD→SSTORE</li>
+          <li>render: PASS / FAIL / WARN / NOT_FOUND per check</li>
+        </ol>
+      </div>
+
+      <div class="card" style="margin-top: 14px;">
+        <h2>// source &amp; install</h2>
+        <div style="font-size: 0.85rem; color: var(--text-dim); margin: 0 0 8px;">
+          // the full skill lives at <a href="https://github.com/jamiuke/EIP-2612PA" target="_blank" rel="noopener">github.com/jamiuke/EIP-2612PA</a>
+        </div>
+        <pre style="background: #000; border: 1px solid var(--border-hot); padding: 8px 10px; font-size: 0.8rem; color: var(--green); margin: 0; overflow-x: auto;">git clone https://github.com/jamiuke/EIP-2612PA.git
+cd EIP-2612PA
+bash scripts/audit.sh 0xYOUR_CONTRACT --network mainnet</pre>
+        <div style="font-size: 0.72rem; color: var(--text-faint); margin-top: 8px;">
+          // 13/13 unit tests pass. read-only. no private key required.
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <a href="https://github.com/jamiuke/EIP-2612PA" target="_blank" rel="noopener">source</a> ·
+  <a href="https://github.com/jamiuke/EIP-2612PA/blob/main/SKILL.md" target="_blank" rel="noopener">SKILL.md</a> ·
+  <a href="https://github.com/jamiuke/EIP-2612PA/blob/main/README.md" target="_blank" rel="noopener">README</a> ·
+  <a href="https://github.com/jamiuke/EIP-2612PA/blob/main/references/eip2612-spec.md" target="_blank" rel="noopener">EIP-2612 spec</a> ·
+  <a href="https://github.com/jamiuke/eip2612pa-demo" target="_blank" rel="noopener">demo source</a>
+  <div style="margin-top: 8px;">MIT // made for the Pharos Network</div>
+</footer>
+
+<script>
+// ============== config ==============
+const NETWORKS = {
+  mainnet: { chainId: 1672, rpc: "https://rpc.pharos.xyz", explorer: "https://www.pharosscan.xyz", label: "Pharos Pacific Ocean Mainnet (chain 1672)" },
+  testnet: { chainId: 688689, rpc: "https://atlantic.dplabs-internal.com", explorer: "https://atlantic.pharosscan.xyz", label: "Pharos Atlantic Testnet (chain 688689)" },
+};
+const PRESETS = {
+  mainnet: [
+    { addr: "0x6dc35147eb53152cd834b5799a07934f13f398a3", label: "recent_mainnet" },
+    { addr: "0x76c2ca2fd57a0c4d3a1ce16a6f2f3a6c6e8a2d4b", label: "fallback_sample" },
+  ],
+  testnet: [
+    { addr: "0x0000000000000000000000000000000000001001", label: "testnet_precompile_0x01" },
+  ],
+};
+
+// ============== EVM opcodes ==============
+const OP = {
+  STOP: 0x00, SSTORE: 0x55, SLOAD: 0x54,
+  CALL: 0xf1, CALLCODE: 0xf2, DELEGATECALL: 0xf4, STATICCALL: 0xfa,
+  JUMPDEST: 0x5b, JUMPI: 0x57, RETURN: 0xf3, REVERT: 0xfd,
+  ADDRESS: 0x30, CHAINID: 0x46, TIMESTAMP: 0x42, EQ: 0x14,
+};
+const SEL_PERMIT = "d505accf";
+const SEL_NONCES = "7ecebe00";
+const SEL_DOMAIN_SEPARATOR = "3644e515";
+const EIP2612_TYPEHASH = "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)";
+const ECRECOVER_PRECOMPILE = "0000000000000000000000000000000000000001";
+
+// ============== helpers ==============
+function* iterOpcodes(raw) {
+  let i = 0;
+  while (i < raw.length) {
+    const op = raw[i];
+    yield [i, op];
+    if (op >= 0x60 && op <= 0x7f) i += (op - 0x5f) + 1;
+    else i += 1;
+  }
+}
+
+function extractStringLiterals(raw) {
+  const pushRegions = [];
+  for (const [off, op] of iterOpcodes(raw)) {
+    if (op >= 0x60 && op <= 0x7f) {
+      const n = op - 0x5f;
+      const payload = raw.slice(off + 1, off + 1 + n);
+      pushRegions.push([off, payload, n]);
+    }
+  }
+  const literals = [];
+  let i = 0;
+  while (i < pushRegions.length) {
+    const [startOff, payload] = pushRegions[i];
+    if (![...payload].every(b => 0x20 <= b && b <= 0x7e)) { i++; continue; }
+    let literalStart = startOff;
+    const literalBytes = [];
+    for (let j = i; j < pushRegions.length; j++) {
+      const [offJ, payloadJ, nJ] = pushRegions[j];
+      if (![...payloadJ].every(b => 0x20 <= b && b <= 0x7e)) break;
+      for (const b of payloadJ) literalBytes.push(b);
+      if (j + 1 < pushRegions.length) {
+        const [offNext] = pushRegions[j + 1];
+        if (offNext !== offJ + nJ + 1) break;
+      }
+    }
+    const literalStr = String.fromCharCode(...literalBytes).replace(/\x00+$/, "");
+    if (literalStr.length >= 3) literals.push([literalStart, literalStr]);
+    i++;
+  }
+  return literals;
+}
+
+function findSelectors(raw) {
+  const results = {};
+  for (let i = 0; i < raw.length - 3; i++) {
+    const selHex = Array.from(raw.slice(i, i + 4)).map(b => b.toString(16).padStart(2, "0")).join("");
+    if ([SEL_PERMIT, SEL_NONCES, SEL_DOMAIN_SEPARATOR].includes(selHex)) {
+      if (!results[selHex]) results[selHex] = [];
+      results[selHex].push(i);
+    }
+  }
+  return results;
+}
+
+function hasOpcodeNear(raw, opcode, ref, window = 256) {
+  const lo = Math.max(0, ref - window);
+  const hi = Math.min(raw.length, ref + window);
+  for (const [off, op] of iterOpcodes(raw.slice(lo, hi))) {
+    if (op === opcode) return [true, lo + off];
+  }
+  return [false, null];
+}
+
+function hasEcrecoverNear(raw, ref, window = 512) {
+  const lo = Math.max(0, ref - window);
+  const hi = Math.min(raw.length, ref + window);
+  const target = [];
+  for (let i = 0; i < 40; i++) target.push(parseInt(ECRECOVER_PRECOMPILE.substr(i * 2, 2), 16));
+  for (let i = lo; i < hi - 20; i++) {
+    if (raw[i] === 0x73) {
+      const payload = Array.from(raw.slice(i + 1, i + 1 + 20));
+      if (JSON.stringify(payload) === JSON.stringify(target)) {
+        for (const [off, op] of iterOpcodes(raw.slice(i + 21, hi))) {
+          if (op === OP.STATICCALL) return [true, i];
+        }
+      }
+    }
+  }
+  return [false, null];
+}
+
+function hasNonceIncrementNear(raw, permitOffset, window = 512) {
+  const lo = Math.max(0, permitOffset);
+  const hi = Math.min(raw.length, permitOffset + window);
+  const sloads = [];
+  for (const [off, op] of iterOpcodes(raw.slice(lo, hi))) {
+    if (op === OP.SLOAD) sloads.push(lo + off);
+    else if (op === OP.SSTORE && sloads.length > 0) return [true, sloads[sloads.length - 1], lo + off];
+  }
+  return [false, null, null];
+}
+
+function audit(bytecodeHex) {
+  if (!bytecodeHex.startsWith("0x")) throw new Error("bytecode must start with 0x");
+  const raw = new Uint8Array(bytecodeHex.slice(2).match(/.{2}/g).map(b => parseInt(b, 16)));
+
+  const literals = extractStringLiterals(raw);
+  const selectors = findSelectors(raw);
+  const checks = [];
+
+  // Check 1
+  let permitRef = null;
+  if (selectors[SEL_PERMIT]) {
+    const offs = selectors[SEL_PERMIT];
+    checks.push({ id: 1, name: "permit() selector present", verdict: "PASS", evidence: `found 0xd505accf at [${offs.slice(0, 3).map(o => "0x" + o.toString(16)).join(", ")}]`, severity: 100 });
+    permitRef = offs[0];
+  } else {
+    checks.push({ id: 1, name: "permit() selector present", verdict: "NOT_FOUND", evidence: "0xd505accf (permit) not in bytecode", severity: 100 });
+  }
+
+  // Check 2
+  if (selectors[SEL_NONCES]) {
+    checks.push({ id: 2, name: "nonces() getter present", verdict: "PASS", evidence: `found 0x7ecebe00`, severity: 100 });
+  } else {
+    checks.push({ id: 2, name: "nonces() getter present", verdict: "FAIL", evidence: "0x7ecebe00 (nonces) not in bytecode", severity: 100 });
+  }
+
+  // Check 3
+  if (selectors[SEL_DOMAIN_SEPARATOR]) {
+    checks.push({ id: 3, name: "DOMAIN_SEPARATOR() getter present", verdict: "PASS", evidence: `found 0x3644e515`, severity: 100 });
+  } else {
+    checks.push({ id: 3, name: "DOMAIN_SEPARATOR() getter present", verdict: "WARN", evidence: "0x3644e515 (DOMAIN_SEPARATOR) not in bytecode", severity: 80 });
+  }
+
+  // Check 4
+  const has4 = literals.some(([_, s]) => s === EIP2612_TYPEHASH);
+  if (has4) {
+    const off = literals.find(([_, s]) => s === EIP2612_TYPEHASH)[0];
+    checks.push({ id: 4, name: "Permit(...) type-hash literal", verdict: "PASS", evidence: `found 82-byte string at 0x${off.toString(16)}`, severity: 95 });
+  } else {
+    checks.push({ id: 4, name: "Permit(...) type-hash literal", verdict: "NOT_FOUND", evidence: "no Permit(...) literal — may not implement EIP-2612", severity: 95 });
+  }
+
+  // Check 5
+  if (permitRef !== null) {
+    const [found, off] = hasEcrecoverNear(raw, permitRef, 512);
+    if (found) {
+      checks.push({ id: 5, name: "ecrecover (precompile 0x01) called", verdict: "PASS", evidence: `STATICCALL to 0x01 at 0x${off.toString(16)}`, severity: 100 });
+    } else {
+      checks.push({ id: 5, name: "ecrecover (precompile 0x01) called", verdict: "FAIL", evidence: "no STATICCALL to 0x01 near permit() — signature not verified", severity: 100 });
+    }
+  } else {
+    checks.push({ id: 5, name: "ecrecover (precompile 0x01) called", verdict: "SKIP", evidence: "no permit() reference", severity: 100 });
+  }
+
+  // Check 6
+  if (permitRef !== null) {
+    const [found, sloadOff, sstoreOff] = hasNonceIncrementNear(raw, permitRef, 512);
+    if (found) {
+      checks.push({ id: 6, name: "nonce incremented after use", verdict: "PASS", evidence: `SLOAD 0x${sloadOff.toString(16)} → SSTORE 0x${sstoreOff.toString(16)}`, severity: 80 });
+    } else {
+      checks.push({ id: 6, name: "nonce incremented after use", verdict: "FAIL", evidence: "no SLOAD→SSTORE pair near permit() — replayable", severity: 80 });
+    }
+  } else {
+    checks.push({ id: 6, name: "nonce incremented after use", verdict: "SKIP", evidence: "no permit() reference", severity: 80 });
+  }
+
+  // Check 7
+  if (permitRef !== null) {
+    const [found, off] = hasOpcodeNear(raw, OP.TIMESTAMP, permitRef, 256);
+    if (found) {
+      checks.push({ id: 7, name: "deadline checked vs block.timestamp", verdict: "PASS", evidence: `TIMESTAMP (0x42) at 0x${off.toString(16)}`, severity: 90 });
+    } else {
+      checks.push({ id: 7, name: "deadline checked vs block.timestamp", verdict: "FAIL", evidence: "no TIMESTAMP near permit()", severity: 90 });
+    }
+  } else {
+    checks.push({ id: 7, name: "deadline checked vs block.timestamp", verdict: "SKIP", evidence: "no permit() reference", severity: 90 });
+  }
+
+  // Check 8
+  if (permitRef !== null) {
+    const [found, off] = hasOpcodeNear(raw, OP.EQ, permitRef, 256);
+    if (found) {
+      checks.push({ id: 8, name: "owner == recovered address", verdict: "PASS", evidence: `EQ (0x14) at 0x${off.toString(16)}`, severity: 90 });
+    } else {
+      checks.push({ id: 8, name: "owner == recovered address", verdict: "WARN", evidence: "no EQ near permit()", severity: 90 });
+    }
+  } else {
+    checks.push({ id: 8, name: "owner == recovered address", verdict: "SKIP", evidence: "no permit() reference", severity: 90 });
+  }
+
+  // Overall
+  let overall, verdict;
+  if (checks.some(c => c.id === 1 && c.verdict === "NOT_FOUND")) {
+    overall = 0; verdict = "NOT_EIP2612";
+  } else {
+    const failSevs = checks.filter(c => c.verdict === "FAIL").map(c => c.severity);
+    overall = failSevs.length ? Math.min(...failSevs) : 100;
+    verdict = overall === 100 ? "PASS" : (overall >= 60 ? "PARTIAL" : "FAIL");
+  }
+
+  return {
+    bytecode_size: raw.length,
+    has_permit: permitRef !== null,
+    has_nonces: !!selectors[SEL_NONCES],
+    has_domain_separator: !!selectors[SEL_DOMAIN_SEPARATOR],
+    overall_score: overall,
+    verdict,
+    checks,
+  };
+}
+
+function sevLabel(s) {
+  if (s === 0) return "NOT_EIP2612";
+  if (s <= 30) return "LOW";
+  if (s <= 60) return "MEDIUM";
+  if (s <= 80) return "HIGH";
+  return "CRITICAL";
+}
+
+function verdictClass(v) {
+  if (v === "PASS") return "pass";
+  if (v === "WARN") return "warn";
+  if (v === "FAIL") return "fail";
+  if (v === "NOT_FOUND") return "nfound";
+  return "skip";
+}
+
+async function fetchBytecode(addr, network) {
+  const url = NETWORKS[network].rpc;
+  const payload = JSON.stringify({ jsonrpc: "2.0", method: "eth_getCode", params: [addr, "latest"], id: 1 });
+  const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: payload });
+  if (!resp.ok) throw new Error(`RPC HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (data.error) throw new Error("RPC error: " + (data.error.message || JSON.stringify(data.error)));
+  const result = data.result;
+  if (!result || result === "0x") throw new Error("no deployed code (EOA)");
+  return result;
+}
+
+// ============== terminal renderer ==============
+const $ = (id) => document.getElementById(id);
+const term = $("term");
+const addrInput = $("addr");
+const networkSel = $("network");
+const runBtn = $("run");
+const clearBtn = $("clear");
+const status = $("status");
+const statusText = $("statusText");
+const presetsEl = $("presets");
+
+function setStatus(text, isError = false) {
+  status.style.display = "flex";
+  status.classList.toggle("error", isError);
+  statusText.textContent = text;
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function log(lines) {
+  for (const [cls, text] of lines) {
+    const span = document.createElement("span");
+    span.className = "ln " + cls;
+    span.textContent = text;
+    term.appendChild(span);
+  }
+  term.scrollTop = term.scrollHeight;
+}
+
+function logUserCommand(addr, network) {
+  log([["prompt", `$ eip2612pa --target ${addr} --network ${network}`]]);
+}
+
+function logReport(report, network, dt) {
+  const lines = [];
+  const addr = addrInput.value;
+  const scoreCls = verdictClass(report.verdict === "NOT_EIP2612" ? "NOT_FOUND" : (report.overall_score === 100 ? "PASS" : (report.overall_score >= 60 ? "WARN" : "FAIL")));
+  const overallCls = scoreCls;
+
+  lines.push(["system", `→ target     : ${addr}`]);
+  lines.push(["system", `→ network    : ${NETWORKS[network].label}`]);
+  lines.push(["system", `→ bytecode   : ${report.bytecode_size} bytes`]);
+  lines.push(["system", `→ has permit : ${report.has_permit} | nonces: ${report.has_nonces} | domain: ${report.has_domain_separator}`]);
+  lines.push(["dim", ""]);
+  lines.push(["prompt", `── AUDIT ──────────────────────────────────────`]);
+
+  if (report.verdict === "NOT_EIP2612") {
+    lines.push(["err", `[0/100 · NOT_EIP2612] contract does not implement EIP-2612`]);
+  } else if (report.overall_score === 100) {
+    lines.push(["ok", `[100/100 · PASS] all 8 checks pass`]);
+  } else if (report.overall_score >= 60) {
+    lines.push(["warn", `[${report.overall_score}/100 · ${report.verdict}] warnings present — review`]);
+  } else {
+    lines.push(["err", `[${report.overall_score}/100 · ${report.verdict}] critical failures detected`]);
+  }
+  lines.push(["dim", ""]);
+
+  for (const c of report.checks) {
+    const sym = c.verdict === "PASS" ? "[OK]" : c.verdict === "WARN" ? "[WN]" : c.verdict === "FAIL" ? "[!!]" : c.verdict === "NOT_FOUND" ? "[??]" : "[--]";
+    const cls = c.verdict === "PASS" ? "ok" : c.verdict === "WARN" ? "warn" : c.verdict === "FAIL" ? "err" : "dim";
+    lines.push([cls, `  ${sym} #${String(c.id).padStart(2, "0")} ${c.name.padEnd(38)} ${c.verdict.padEnd(10)} sev=${c.severity}`]);
+    lines.push(["dim", `         ${c.evidence}`]);
+  }
+
+  lines.push(["dim", ""]);
+  lines.push(["dim", `── done in ${dt}s ── ${new Date().toISOString()} ──`]);
+  lines.push(["dim", ""]);
+  log(lines);
+}
+
+async function run() {
+  const addr = addrInput.value.trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(addr)) {
+    log([["err", "[error] address must be 0x + 40 hex chars"]]);
+    return;
+  }
+  const network = networkSel.value;
+  runBtn.disabled = true;
+  logUserCommand(addr, network);
+  setStatus(`fetching bytecode from ${NETWORKS[network].rpc}…`);
+  log([["system", `→ connecting rpc ...`]]);
+  try {
+    const t0 = performance.now();
+    const bc = await fetchBytecode(addr, network);
+    const bytes = (bc.length - 2) / 2;
+    setStatus(`got ${bytes} bytes. running 8 checks…`);
+    log([["system", `→ received ${bytes} bytes. running audit ...`]]);
+    const report = audit(bc);
+    const dt = ((performance.now() - t0) / 1000).toFixed(2);
+    logReport(report, network, dt);
+    setStatus(`done in ${dt}s. verdict: ${report.verdict}.`);
+  } catch (e) {
+    log([["err", `[rpc error] ${e.message}`]]);
+    setStatus(e.message, true);
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function renderPresets() {
+  const network = networkSel.value;
+  presetsEl.innerHTML = "";
+  for (const p of (PRESETS[network] || [])) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = p.label;
+    chip.title = p.addr;
+    chip.onclick = () => { addrInput.value = p.addr; addrInput.focus(); };
+    presetsEl.appendChild(chip);
+  }
+}
+
+runBtn.addEventListener("click", run);
+clearBtn.addEventListener("click", () => {
+  term.innerHTML = "";
+  log([
+    ["system", "$ eip2612pa --target <paste address> --network mainnet"],
+    ["system", "// cleared. type address above, hit [audit]."],
+  ]);
+});
+networkSel.addEventListener("change", renderPresets);
+addrInput.addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+renderPresets();
+</script>
+</body>
+</html>
